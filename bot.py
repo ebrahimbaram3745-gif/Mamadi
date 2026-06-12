@@ -50,17 +50,18 @@ try:
 except:
     DB = {}
 
-# ===================== UI =====================
+# ===================== MENU =====================
 def menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎮 جستجوی جواب", callback_data="search")],
-        [InlineKeyboardButton("⚡ پرو حالت", callback_data="pro")]
+        [InlineKeyboardButton("🎮 جستجوی جواب آمیرزا", callback_data="search")],
+        [InlineKeyboardButton("⚡ پرو حالت", callback_data="pro")],
+        [InlineKeyboardButton("🥜 جواب فندوق", callback_data="fandogh")]
     ])
 
 # ===================== START =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 ربات PRO آمیرزا\n\nیکی رو انتخاب کن:",
+        "🤖 ربات حرفه‌ای جواب مراحل\n\nیکی رو انتخاب کن:",
         reply_markup=menu()
     )
 
@@ -70,19 +71,21 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
 
     if q.data == "search":
-        await q.message.reply_text("🔢 شماره مرحله رو وارد کن:")
+        await q.message.reply_text("🔢 شماره مرحله آمیرزا رو وارد کن:")
 
     elif q.data == "pro":
         await q.message.reply_text("⚡ حالت PRO فعال شد\nفقط شماره مرحله رو بفرست")
 
-# ===================== SCRAPER =====================
-def scrape(stage: str):
+    elif q.data == "fandogh":
+        await q.message.reply_text("🔎 در حال جستجوی جواب فندوق...")
+        await q.message.reply_text(get_fandogh_answer())
+
+# ===================== AMIRZA SCRAPER =====================
+def scrape_amirza(stage: str):
     try:
         url = "https://www.digikala.com/mag/complete-amirza-guide/"
-
         r = requests.get(url, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
-
         text = soup.get_text(separator=" ")
 
         if stage in text:
@@ -90,11 +93,25 @@ def scrape(stage: str):
             return text[i:i+300]
 
     except Exception as e:
-        print("scrape error:", e)
+        print("amirza scrape error:", e)
 
     return None
 
-# ===================== CORE ENGINE =====================
+# ===================== FANDOGH SCRAPER =====================
+def get_fandogh_answer():
+    try:
+        url = "https://par30games.net/266629/fandogh-game-answer/"
+        r = requests.get(url, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        text = soup.get_text(separator=" ")
+
+        return text[:1200]
+
+    except Exception as e:
+        return f"❌ خطا در فندوق: {e}"
+
+# ===================== ENGINE =====================
 def get_answer(stage: str):
 
     if stage in cache:
@@ -104,19 +121,19 @@ def get_answer(stage: str):
         cache[stage] = DB[stage]
         return DB[stage]
 
-    site = scrape(stage)
+    site = scrape_amirza(stage)
     if site:
         cache[stage] = site
         return site
 
     return None
 
-# ===================== MESSAGE =====================
+# ===================== MESSAGE HANDLER =====================
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
 
     if not text.isdigit():
-        await update.message.reply_text("❌ فقط عدد مرحله وارد کن")
+        await update.message.reply_text("❌ فقط شماره مرحله وارد کن")
         return
 
     await update.message.reply_text("🔎 در حال جستجو...")
