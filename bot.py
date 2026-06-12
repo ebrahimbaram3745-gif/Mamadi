@@ -1,9 +1,11 @@
 import os
 import json
-import logging
 import requests
+import logging
+from threading import Thread
 from bs4 import BeautifulSoup
 
+from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -14,116 +16,129 @@ from telegram.ext import (
     filters
 )
 
-# ---------------- CONFIG ----------------
+# ===================== LOG =====================
 logging.basicConfig(level=logging.INFO)
 
+# ===================== TOKEN =====================
 TOKEN = os.environ.get("BOT_TOKEN")
-if not TOKEN:
-    raise Exception("BOT_TOKEN is not set")
 
-# ---------------- CACHE ----------------
+if not TOKEN:
+    raise Exception("❌ BOT_TOKEN is missing in Render Environment Variables")
+
+# ===================== FLASK KEEP ALIVE =====================
+app_flask = Flask('')
+
+@app_flask.route('/', methods=['GET', 'HEAD'])
+def home():
+    return "Bot is running!", 200
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app_flask.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run_flask)
+    t.start()
+
+# ===================== CACHE =====================
 cache = {}
 
-# ---------------- LOCAL DB ----------------
+# ===================== LOCAL DB =====================
 try:
     with open("answers.json", "r", encoding="utf-8") as f:
-        LOCAL_DB = json.load(f)
+        DB = json.load(f)
 except:
-    LOCAL_DB = {}
+    DB = {}
 
-# ---------------- UI ----------------
-def main_menu():
+# ===================== UI =====================
+def menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎮 جستجوی جواب مرحله", callback_data="search")],
-        [InlineKeyboardButton("ℹ️ درباره", callback_data="about")]
+        [InlineKeyboardButton("🎮 جستجوی جواب", callback_data="search")],
+        [InlineKeyboardButton("⚡ پرو حالت", callback_data="pro")]
     ])
 
-# ---------------- START ----------------
+# ===================== START =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🎮 ربات آمیرزا حرفه‌ای\n\nیکی از گزینه‌ها را انتخاب کن:",
-        reply_markup=main_menu()
+        "🤖 ربات PRO آمیرزا\n\nیکی رو انتخاب کن:",
+        reply_markup=menu()
     )
 
-# ---------------- CALLBACK ----------------
+# ===================== CALLBACK =====================
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
     if q.data == "search":
-        await q.message.reply_text("🔢 شماره مرحله را وارد کن:")
+        await q.message.reply_text("🔢 شماره مرحله رو وارد کن:")
 
-    elif q.data == "about":
-        await q.message.reply_text("🤖 ساخته شده برای دریافت جواب مراحل آمیرزا")
+    elif q.data == "pro":
+        await q.message.reply_text("⚡ حالت PRO فعال شد\nفقط شماره مرحله رو بفرست")
 
-# ---------------- SCRAPER (SITE MODE) ----------------
-def scrape_from_site(stage: str):
+# ===================== SCRAPER =====================
+def scrape(stage: str):
     try:
         url = "https://www.digikala.com/mag/complete-amirza-guide/"
 
         r = requests.get(url, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
 
-        text = soup.get_text()
+        text = soup.get_text(separator=" ")
 
-        # ساده: پیدا کردن شماره مرحله داخل متن
         if stage in text:
-            idx = text.find(stage)
-            return text[idx:idx+200]
+            i = text.find(stage)
+            return text[i:i+300]
 
     except Exception as e:
         print("scrape error:", e)
 
     return None
 
-# ---------------- CORE SEARCH ----------------
+# ===================== CORE ENGINE =====================
 def get_answer(stage: str):
+
     if stage in cache:
         return cache[stage]
 
-    # 1. local DB
-    if stage in LOCAL_DB:
-        cache[stage] = LOCAL_DB[stage]
-        return LOCAL_DB[stage]
+    if stage in DB:
+        cache[stage] = DB[stage]
+        return DB[stage]
 
-    # 2. scraping site
-    site_answer = scrape_from_site(stage)
-    if site_answer:
-        cache[stage] = site_answer
-        return site_answer
+    site = scrape(stage)
+    if site:
+        cache[stage] = site
+        return site
 
     return None
 
-# ---------------- MESSAGE ----------------
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    stage = update.message.text.strip()
+# ===================== MESSAGE =====================
+async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
 
-    if not stage.isdigit():
-        await update.message.reply_text("❌ فقط شماره مرحله وارد کن")
+    if not text.isdigit():
+        await update.message.reply_text("❌ فقط عدد مرحله وارد کن")
         return
 
     await update.message.reply_text("🔎 در حال جستجو...")
 
-    answer = get_answer(stage)
+    ans = get_answer(text)
 
-    if answer:
-        await update.message.reply_text(
-            f"✅ مرحله {stage}\n\n{answer}"
-        )
+    if ans:
+        await update.message.reply_text(f"✅ مرحله {text}\n\n{ans}")
     else:
-        await update.message.reply_text(
-            "❌ جواب پیدا نشد"
-        )
+        await update.message.reply_text("❌ پیدا نشد")
 
-# ---------------- MAIN ----------------
+# ===================== MAIN =====================
 def main():
+    keep_alive()
+
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(buttons))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
 
-    print("Bot running...")
+    print("BOT RUNNING...")
     app.run_polling()
 
 if __name__ == "__main__":
