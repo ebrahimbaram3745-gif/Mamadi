@@ -1,32 +1,25 @@
 import os
-import json
 import requests
-from collections import defaultdict
 from threading import Thread
 from flask import Flask
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    MessageHandler,
-    ContextTypes,
-    filters
-)
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 
-# ================= CONFIG =================
+# ================= KEYS =================
 TOKEN = os.getenv("BOT_TOKEN")
+OPENAI_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
 if not TOKEN:
-    raise Exception("BOT_TOKEN is missing")
+    raise Exception("BOT_TOKEN missing")
 
-# ================= FLASK KEEP ALIVE =================
+# ================= FLASK =================
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "AI PRO Bot Running"
+    return "ULTRA AI BOT RUNNING"
 
 def run():
     port = int(os.environ.get("PORT", 10000))
@@ -35,110 +28,106 @@ def run():
 def keep_alive():
     Thread(target=run, daemon=True).start()
 
-# ================= MEMORY SYSTEM =================
-memory = defaultdict(list)
+# ================= MEMORY =================
+memory = {}
 
-stats = {
-    "users": set(),
-    "messages": 0
-}
+user_mode = {}
 
-# ================= UI =================
+# ================= MENU =================
 def menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💬 چت هوش مصنوعی", callback_data="chat")],
+        [InlineKeyboardButton("🤖 چت AI (Ultra)", callback_data="chat")],
         [InlineKeyboardButton("📚 حل سوال درسی", callback_data="study")],
-        [InlineKeyboardButton("🔎 جستجوی وب", callback_data="search")],
-        [InlineKeyboardButton("📰 اخبار روز", callback_data="news")]
+        [InlineKeyboardButton("🧠 Gemini Mode", callback_data="gemini")],
+        [InlineKeyboardButton("⚡ GPT Mode", callback_data="gpt")],
+        [InlineKeyboardButton("🔎 جستجو", callback_data="search")]
     ])
 
-# ================= START =================
+# ================= AI: OPENAI =================
+def ask_openai(text):
+    if not OPENAI_KEY:
+        return "❌ OpenAI API ندارد"
+
+    try:
+        r = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENAI_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": text}]
+            },
+            timeout=20
+        )
+
+        return r.json()["choices"][0]["message"]["content"]
+
+    except Exception as e:
+        return f"❌ GPT Error: {e}"
+
+# ================= AI: GEMINI =================
+def ask_gemini(text):
+    if not GEMINI_KEY:
+        return "❌ Gemini API ندارد"
+
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+
+        r = requests.post(url, json={
+            "contents": [{
+                "parts": [{"text": text}]
+            }]
+        }, timeout=20)
+
+        return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+    except Exception as e:
+        return f"❌ Gemini Error: {e}"
+
+# ================= ROUTER (ULTRA BRAIN) =================
+def smart_ai(text):
+
+    gpt = ask_openai(text)
+    gemini = ask_gemini(text)
+
+    # انتخاب بهترین جواب (ساده ولی کاربردی)
+    if len(gpt) > len(gemini):
+        return f"🤖 GPT Answer:\n{gpt}\n\n🧠 Gemini Backup:\n{gemini}"
+    else:
+        return f"🧠 Gemini Answer:\n{gemini}\n\n🤖 GPT Backup:\n{gpt}"
+
+# ================= HANDLERS =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    stats["users"].add(uid)
-
-    await update.message.reply_text(
-        "🤖 ربات PRO AI فعال شد\nیکی از گزینه‌ها را انتخاب کن:",
-        reply_markup=menu()
-    )
-
-# ================= CALLBACK =================
-user_mode = {}
+    await update.message.reply_text("🚀 ULTRA AI BOT فعال شد", reply_markup=menu())
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
-    uid = q.from_user.id
+    user_mode[q.from_user.id] = q.data
 
-    if q.data == "chat":
-        user_mode[uid] = "chat"
-        await q.message.reply_text("💬 سوالت رو بپرس")
+    await q.message.reply_text("✍️ پیام خود را ارسال کنید")
 
-    elif q.data == "study":
-        user_mode[uid] = "study"
-        await q.message.reply_text("📚 سوال درسی را ارسال کن (با توضیح کامل جواب می‌دم)")
-
-    elif q.data == "search":
-        user_mode[uid] = "search"
-        await q.message.reply_text("🔎 عبارت جستجو را بفرست")
-
-    elif q.data == "news":
-        news = get_news()
-        await q.message.reply_text(news)
-
-# ================= AI ENGINE =================
-def ai_response(user_id, text, mode):
-
-    # حافظه گفتگو
-    memory[user_id].append(text)
-    history = "\n".join(memory[user_id][-5:])
-
-    if mode == "chat":
-        return f"🤖 پاسخ هوشمند:\n\n{text}\n\n🧠 حافظه:\n{history}"
-
-    elif mode == "study":
-        return f"📚 حل آموزشی:\n\nموضوع: {text}\n\n💡 توضیح:\nاین سوال را مرحله به مرحله تحلیل می‌کنم...\n(نسخه پرو قابل اتصال به GPT دارد)"
-
-    elif mode == "search":
-        return web_search(text)
-
-    return "از منو استفاده کن"
-
-# ================= WEB SEARCH =================
-def web_search(query):
-    try:
-        url = f"https://duckduckgo.com/?q={query}"
-        return f"🔎 نتیجه جستجو:\n{url}"
-    except:
-        return "❌ خطا در جستجو"
-
-# ================= NEWS =================
-def get_news():
-    try:
-        r = requests.get("https://www.aljazeera.com/xml/rss/all.xml", timeout=10)
-        if r.status_code == 200:
-            return "📰 آخرین اخبار دریافت شد (نسخه ساده)\n\nبرای نسخه حرفه‌ای RSS کامل اضافه می‌شود"
-        return "❌ خبر پیدا نشد"
-    except:
-        return "❌ خطا در دریافت خبر"
-
-# ================= MESSAGE =================
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     uid = update.effective_user.id
     text = update.message.text
 
-    stats["users"].add(uid)
-    stats["messages"] += 1
+    mode = user_mode.get(uid, "chat")
 
-    mode = user_mode.get(uid)
+    if mode == "gpt":
+        reply = ask_openai(text)
 
-    if not mode:
-        await update.message.reply_text("از منو انتخاب کن 👇", reply_markup=menu())
-        return
+    elif mode == "gemini":
+        reply = ask_gemini(text)
 
-    reply = ai_response(uid, text, mode)
+    elif mode == "study":
+        reply = ask_openai("حل آموزشی و مرحله‌ای: " + text)
+
+    else:
+        reply = smart_ai(text)
 
     await update.message.reply_text(reply)
 
@@ -152,7 +141,7 @@ def main():
     app_bot.add_handler(CallbackQueryHandler(buttons))
     app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
 
-    print("🤖 PRO AI BOT RUNNING")
+    print("🔥 ULTRA AI BOT RUNNING")
     app_bot.run_polling()
 
 if __name__ == "__main__":
