@@ -1,6 +1,8 @@
 import os
 import json
 import logging
+import requests
+from bs4 import BeautifulSoup
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -12,68 +14,106 @@ from telegram.ext import (
     filters
 )
 
-# ---------------- LOGGING ----------------
+# ---------------- CONFIG ----------------
 logging.basicConfig(level=logging.INFO)
 
-# ---------------- TOKEN (FIXED) ----------------
 TOKEN = os.environ.get("BOT_TOKEN")
-
 if not TOKEN:
-    raise Exception("❌ BOT_TOKEN is not set in Render Environment Variables")
+    raise Exception("BOT_TOKEN is not set")
 
-# ---------------- MEMORY ----------------
-waiting_users = set()
+# ---------------- CACHE ----------------
+cache = {}
 
-# ---------------- LOAD ANSWERS ----------------
+# ---------------- LOCAL DB ----------------
 try:
     with open("answers.json", "r", encoding="utf-8") as f:
-        answers = json.load(f)
+        LOCAL_DB = json.load(f)
 except:
-    answers = {}
+    LOCAL_DB = {}
+
+# ---------------- UI ----------------
+def main_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎮 جستجوی جواب مرحله", callback_data="search")],
+        [InlineKeyboardButton("ℹ️ درباره", callback_data="about")]
+    ])
 
 # ---------------- START ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("🎮 دریافت جواب مرحله", callback_data="search")]
-    ]
-
     await update.message.reply_text(
-        "👋 به ربات آمیرزا خوش آمدی\n\nیکی از گزینه‌ها را انتخاب کن:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        "🎮 ربات آمیرزا حرفه‌ای\n\nیکی از گزینه‌ها را انتخاب کن:",
+        reply_markup=main_menu()
     )
 
-# ---------------- BUTTONS ----------------
+# ---------------- CALLBACK ----------------
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    q = update.callback_query
+    await q.answer()
 
-    if query.data == "search":
-        waiting_users.add(query.from_user.id)
+    if q.data == "search":
+        await q.message.reply_text("🔢 شماره مرحله را وارد کن:")
 
-        await query.message.reply_text(
-            "🔢 شماره مرحله را وارد کن:"
-        )
+    elif q.data == "about":
+        await q.message.reply_text("🤖 ساخته شده برای دریافت جواب مراحل آمیرزا")
 
-# ---------------- MESSAGE HANDLER ----------------
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    text = update.message.text.strip()
+# ---------------- SCRAPER (SITE MODE) ----------------
+def scrape_from_site(stage: str):
+    try:
+        url = "https://www.digikala.com/mag/complete-amirza-guide/"
 
-    if user_id not in waiting_users:
+        r = requests.get(url, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        text = soup.get_text()
+
+        # ساده: پیدا کردن شماره مرحله داخل متن
+        if stage in text:
+            idx = text.find(stage)
+            return text[idx:idx+200]
+
+    except Exception as e:
+        print("scrape error:", e)
+
+    return None
+
+# ---------------- CORE SEARCH ----------------
+def get_answer(stage: str):
+    if stage in cache:
+        return cache[stage]
+
+    # 1. local DB
+    if stage in LOCAL_DB:
+        cache[stage] = LOCAL_DB[stage]
+        return LOCAL_DB[stage]
+
+    # 2. scraping site
+    site_answer = scrape_from_site(stage)
+    if site_answer:
+        cache[stage] = site_answer
+        return site_answer
+
+    return None
+
+# ---------------- MESSAGE ----------------
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    stage = update.message.text.strip()
+
+    if not stage.isdigit():
+        await update.message.reply_text("❌ فقط شماره مرحله وارد کن")
         return
 
-    answer = answers.get(text)
+    await update.message.reply_text("🔎 در حال جستجو...")
+
+    answer = get_answer(stage)
 
     if answer:
         await update.message.reply_text(
-            f"✅ مرحله {text}\n\n{answer}"
+            f"✅ مرحله {stage}\n\n{answer}"
         )
     else:
         await update.message.reply_text(
-            "❌ برای این مرحله جوابی ثبت نشده"
+            "❌ جواب پیدا نشد"
         )
-
-    waiting_users.discard(user_id)
 
 # ---------------- MAIN ----------------
 def main():
@@ -81,9 +121,9 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(buttons))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("Bot is running...")
+    print("Bot running...")
     app.run_polling()
 
 if __name__ == "__main__":
