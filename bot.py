@@ -1,12 +1,15 @@
 import os
 import json
-import requests
-import logging
 from threading import Thread
-from bs4 import BeautifulSoup
 
 from flask import Flask
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
+
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -16,169 +19,283 @@ from telegram.ext import (
     filters
 )
 
-# ===================== LOG =====================
-logging.basicConfig(level=logging.INFO)
+# =========================
+# تنظیمات
+# =========================
 
-# ===================== TOKEN =====================
-TOKEN = os.environ.get("BOT_TOKEN")
+TOKEN = os.getenv("BOT_TOKEN")
 
-if not TOKEN:
-    raise Exception("❌ BOT_TOKEN is missing")
+ADMIN_ID = 7363962357  # آیدی عددی خودت
 
-# ===================== FLASK KEEP ALIVE =====================
-app_flask = Flask('')
+DATA_DIR = "data"
+ANSWERS_FILE = f"{DATA_DIR}/answers.json"
+STATS_FILE = f"{DATA_DIR}/stats.json"
+USERS_FILE = f"{DATA_DIR}/users.json"
 
-@app_flask.route('/', methods=['GET', 'HEAD'])
+# =========================
+# Flask
+# =========================
+
+app_flask = Flask(__name__)
+
+@app_flask.route("/")
 def home():
-    return "Bot is running!", 200
+    return "Bot Running"
 
-def run_flask():
+def run_web():
     port = int(os.environ.get("PORT", 10000))
-    app_flask.run(host='0.0.0.0', port=port)
+    app_flask.run(host="0.0.0.0", port=port)
 
 def keep_alive():
-    t = Thread(target=run_flask)
-    t.start()
+    Thread(target=run_web).start()
 
-# ===================== CACHE =====================
-cache = {}
+# =========================
+# فایل ها
+# =========================
 
-# ===================== DB =====================
-try:
-    with open("answers.json", "r", encoding="utf-8") as f:
-        DB = json.load(f)
-except:
-    DB = {}
+def load_json(path, default):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return default
 
-# ===================== USER STATE (مهم) =====================
-user_state = {}
+def save_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
-# ===================== MENU =====================
-def menu():
+answers = load_json(ANSWERS_FILE, {})
+stats = load_json(STATS_FILE, {"users": 0, "searches": 0})
+users = load_json(USERS_FILE, [])
+
+# =========================
+# وضعیت کاربران
+# =========================
+
+user_mode = {}
+
+# =========================
+# منوها
+# =========================
+
+def main_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎮 آمیرزا", callback_data="amirza")],
-        [InlineKeyboardButton("🥜 فندوق", callback_data="fandogh")]
+        [
+            InlineKeyboardButton("🎮 آمیرزا", callback_data="amirza")
+        ],
+        [
+            InlineKeyboardButton("🥜 فندوق", callback_data="fandogh")
+        ],
+        [
+            InlineKeyboardButton("📊 آمار", callback_data="info")
+        ]
     ])
 
-# ===================== START =====================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_state[update.effective_user.id] = None
+def back_menu():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔙 بازگشت", callback_data="back")
+        ],
+        [
+            InlineKeyboardButton("🏠 خانه", callback_data="home")
+        ]
+    ])
 
-    await update.message.reply_text(
-        "🤖 ربات جواب مراحل\n\nیکی رو انتخاب کن:",
-        reply_markup=menu()
+# =========================
+# کاربران
+# =========================
+
+def register_user(user_id):
+    global users
+
+    if user_id not in users:
+        users.append(user_id)
+        save_json(USERS_FILE, users)
+
+        stats["users"] = len(users)
+        save_json(STATS_FILE, stats)
+
+# =========================
+# START
+# =========================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    register_user(update.effective_user.id)
+
+    text = (
+        "╔══════════════╗\n"
+        "🎮 ربات راهنمای مراحل\n"
+        "╚══════════════╝\n\n"
+        "یکی از گزینه‌ها را انتخاب کنید:"
     )
 
-# ===================== CALLBACK =====================
+    await update.message.reply_text(
+        text,
+        reply_markup=main_menu()
+    )
+
+# =========================
+# دکمه ها
+# =========================
+
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
 
-    uid = q.from_user.id
+    query = update.callback_query
+    await query.answer()
 
-    if q.data == "amirza":
-        user_state[uid] = "amirza"
-        await q.message.reply_text("🔢 شماره مرحله آمیرزا رو وارد کن:")
+    uid = query.from_user.id
 
-    elif q.data == "fandogh":
-        user_state[uid] = "fandogh"
-        await q.message.reply_text("🔢 شماره مرحله فندوق رو وارد کن:")
+    if query.data == "home":
 
-# ===================== AMIRZA =====================
-def scrape_amirza(stage: str):
-    try:
-        url = "https://www.digikala.com/mag/complete-amirza-guide/"
-        r = requests.get(url, timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
-        text = soup.get_text(separator=" ")
+        user_mode[uid] = None
 
-        if stage in text:
-            i = text.find(stage)
-            return text[i:i+300]
+        await query.message.reply_text(
+            "🏠 منوی اصلی",
+            reply_markup=main_menu()
+        )
 
-    except:
-        pass
+    elif query.data == "back":
 
-    return None
+        user_mode[uid] = None
 
-# ===================== FANDOGH =====================
-def scrape_fandogh(stage: str):
-    try:
-        url = "https://par30games.net/266629/fandogh-game-answer/"
-        r = requests.get(url, timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
-        text = soup.get_text(separator=" ")
+        await query.message.reply_text(
+            "🔙 بازگشت",
+            reply_markup=main_menu()
+        )
 
-        if stage in text:
-            i = text.find(stage)
-            return text[i:i+400]
+    elif query.data == "amirza":
 
-    except:
-        pass
+        user_mode[uid] = "amirza"
 
-    return None
+        await query.message.reply_text(
+            "🎮 شماره مرحله آمیرزا را وارد کنید:",
+            reply_markup=back_menu()
+        )
 
-# ===================== ENGINE =====================
-def get_answer(mode: str, stage: str):
+    elif query.data == "fandogh":
 
-    key = f"{mode}:{stage}"
+        user_mode[uid] = "fandogh"
 
-    if key in cache:
-        return cache[key]
+        await query.message.reply_text(
+            "🥜 شماره مرحله فندوق را وارد کنید:",
+            reply_markup=back_menu()
+        )
 
-    if mode == "amirza":
-        if stage in DB:
-            cache[key] = DB[stage]
-            return DB[stage]
+    elif query.data == "info":
 
-        ans = scrape_amirza(stage)
+        text = (
+            f"📊 آمار ربات\n\n"
+            f"👥 کاربران: {stats['users']}\n"
+            f"🔎 جستجوها: {stats['searches']}"
+        )
 
-    elif mode == "fandogh":
-        ans = scrape_fandogh(stage)
+        await query.message.reply_text(
+            text,
+            reply_markup=main_menu()
+        )
 
-    else:
-        return None
+# =========================
+# جستجو
+# =========================
 
-    if ans:
-        cache[key] = ans
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    return ans
-
-# ===================== MESSAGE HANDLER =====================
-async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     text = update.message.text.strip()
 
-    mode = user_state.get(uid)
+    mode = user_mode.get(uid)
 
-    if not mode:
-        await update.message.reply_text("اول یکی از گزینه‌ها رو انتخاب کن 👇")
+    if mode is None:
+
+        await update.message.reply_text(
+            "ابتدا بازی را انتخاب کن 👇",
+            reply_markup=main_menu()
+        )
+
         return
 
     if not text.isdigit():
-        await update.message.reply_text("❌ فقط شماره مرحله وارد کن")
+
+        await update.message.reply_text(
+            "❌ فقط شماره مرحله را ارسال کن"
+        )
+
         return
 
-    await update.message.reply_text("🔎 در حال جستجو...")
+    stage = text
 
-    ans = get_answer(mode, text)
+    game_data = answers.get(mode, {})
 
-    if ans:
-        await update.message.reply_text(f"✅ مرحله {text}\n\n{ans}")
+    result = game_data.get(stage)
+
+    stats["searches"] += 1
+    save_json(STATS_FILE, stats)
+
+    if result:
+
+        if isinstance(result, list):
+            result_text = "\n".join([f"• {x}" for x in result])
+        else:
+            result_text = str(result)
+
+        game_name = "آمیرزا" if mode == "amirza" else "فندوق"
+
+        await update.message.reply_text(
+            f"🎮 {game_name}\n\n"
+            f"📌 مرحله: {stage}\n\n"
+            f"{result_text}",
+            reply_markup=back_menu()
+        )
+
     else:
-        await update.message.reply_text("❌ پیدا نشد")
 
-# ===================== MAIN =====================
+        await update.message.reply_text(
+            "❌ مرحله پیدا نشد",
+            reply_markup=back_menu()
+        )
+
+# =========================
+# پنل ادمین
+# =========================
+
+async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    await update.message.reply_text(
+        f"📊 آمار ربات\n\n"
+        f"👥 کاربران: {stats['users']}\n"
+        f"🔎 جستجوها: {stats['searches']}"
+    )
+
+# =========================
+# MAIN
+# =========================
+
 def main():
+
     keep_alive()
 
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(buttons))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
+    app.add_handler(CommandHandler("stats", stats_cmd))
 
-    print("BOT RUNNING...")
+    app.add_handler(
+        CallbackQueryHandler(buttons)
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handle_message
+        )
+    )
+
+    print("BOT RUNNING")
+
     app.run_polling()
 
 if __name__ == "__main__":
