@@ -30,7 +30,7 @@ def keep_alive():
     t.start()
 
 # ---------------- BOT CONFIG ----------------
-TOKEN = os.getenv("BOT_TOKEN", "PUT_YOUR_TOKEN_HERE")
+TOKEN = os.getenv("8843057441:AAG3vIg4g6oGb1NerGH6arzblOwAGQShxD4")
 
 logging.basicConfig(level=logging.INFO)
 
