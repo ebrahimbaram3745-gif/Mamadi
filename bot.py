@@ -16,7 +16,7 @@ from telegram.ext import (
 logging.basicConfig(level=logging.INFO)
 
 # ---------------- TOKEN (FIXED) ----------------
-TOKEN = os.environ.get("8843057441:AAG3vIg4g6oGb1NerGH6arzblOwAGQShxD4")
+TOKEN = os.environ.get("BOT_TOKEN")
 
 if not TOKEN:
     raise Exception("❌ BOT_TOKEN is not set in Render Environment Variables")
