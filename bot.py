@@ -9,7 +9,7 @@ from telegram.ext import (
     filters
 )
 
-TOKEN = "توکن_جدید_ربات"
+TOKEN = "8843057441:AAG3vIg4g6oGb1NerGH6arzblOwAGQShxD4"
 
 waiting_users = set()
 
