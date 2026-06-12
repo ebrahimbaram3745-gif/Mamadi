@@ -1,15 +1,11 @@
 import os
 import json
+import requests
+from collections import defaultdict
 from threading import Thread
-
 from flask import Flask
 
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup
-)
-
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -19,284 +15,145 @@ from telegram.ext import (
     filters
 )
 
-# =========================
-# تنظیمات
-# =========================
-
+# ================= CONFIG =================
 TOKEN = os.getenv("BOT_TOKEN")
 
-ADMIN_ID = 7363962357  # آیدی عددی خودت
+if not TOKEN:
+    raise Exception("BOT_TOKEN is missing")
 
-DATA_DIR = "data"
-ANSWERS_FILE = f"{DATA_DIR}/answers.json"
-STATS_FILE = f"{DATA_DIR}/stats.json"
-USERS_FILE = f"{DATA_DIR}/users.json"
+# ================= FLASK KEEP ALIVE =================
+app = Flask(__name__)
 
-# =========================
-# Flask
-# =========================
-
-app_flask = Flask(__name__)
-
-@app_flask.route("/")
+@app.route("/")
 def home():
-    return "Bot Running"
+    return "AI PRO Bot Running"
 
-def run_web():
+def run():
     port = int(os.environ.get("PORT", 10000))
-    app_flask.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port)
 
 def keep_alive():
-    Thread(target=run_web).start()
+    Thread(target=run, daemon=True).start()
 
-# =========================
-# فایل ها
-# =========================
+# ================= MEMORY SYSTEM =================
+memory = defaultdict(list)
 
-def load_json(path, default):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except:
-        return default
+stats = {
+    "users": set(),
+    "messages": 0
+}
 
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-answers = load_json(ANSWERS_FILE, {})
-stats = load_json(STATS_FILE, {"users": 0, "searches": 0})
-users = load_json(USERS_FILE, [])
-
-# =========================
-# وضعیت کاربران
-# =========================
-
-user_mode = {}
-
-# =========================
-# منوها
-# =========================
-
-def main_menu():
+# ================= UI =================
+def menu():
     return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🎮 آمیرزا", callback_data="amirza")
-        ],
-        [
-            InlineKeyboardButton("🥜 فندوق", callback_data="fandogh")
-        ],
-        [
-            InlineKeyboardButton("📊 آمار", callback_data="info")
-        ]
+        [InlineKeyboardButton("💬 چت هوش مصنوعی", callback_data="chat")],
+        [InlineKeyboardButton("📚 حل سوال درسی", callback_data="study")],
+        [InlineKeyboardButton("🔎 جستجوی وب", callback_data="search")],
+        [InlineKeyboardButton("📰 اخبار روز", callback_data="news")]
     ])
 
-def back_menu():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🔙 بازگشت", callback_data="back")
-        ],
-        [
-            InlineKeyboardButton("🏠 خانه", callback_data="home")
-        ]
-    ])
-
-# =========================
-# کاربران
-# =========================
-
-def register_user(user_id):
-    global users
-
-    if user_id not in users:
-        users.append(user_id)
-        save_json(USERS_FILE, users)
-
-        stats["users"] = len(users)
-        save_json(STATS_FILE, stats)
-
-# =========================
-# START
-# =========================
-
+# ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    register_user(update.effective_user.id)
-
-    text = (
-        "╔══════════════╗\n"
-        "🎮 ربات راهنمای مراحل\n"
-        "╚══════════════╝\n\n"
-        "یکی از گزینه‌ها را انتخاب کنید:"
-    )
+    uid = update.effective_user.id
+    stats["users"].add(uid)
 
     await update.message.reply_text(
-        text,
-        reply_markup=main_menu()
+        "🤖 ربات PRO AI فعال شد\nیکی از گزینه‌ها را انتخاب کن:",
+        reply_markup=menu()
     )
 
-# =========================
-# دکمه ها
-# =========================
+# ================= CALLBACK =================
+user_mode = {}
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
 
-    query = update.callback_query
-    await query.answer()
+    uid = q.from_user.id
 
-    uid = query.from_user.id
+    if q.data == "chat":
+        user_mode[uid] = "chat"
+        await q.message.reply_text("💬 سوالت رو بپرس")
 
-    if query.data == "home":
+    elif q.data == "study":
+        user_mode[uid] = "study"
+        await q.message.reply_text("📚 سوال درسی را ارسال کن (با توضیح کامل جواب می‌دم)")
 
-        user_mode[uid] = None
+    elif q.data == "search":
+        user_mode[uid] = "search"
+        await q.message.reply_text("🔎 عبارت جستجو را بفرست")
 
-        await query.message.reply_text(
-            "🏠 منوی اصلی",
-            reply_markup=main_menu()
-        )
+    elif q.data == "news":
+        news = get_news()
+        await q.message.reply_text(news)
 
-    elif query.data == "back":
+# ================= AI ENGINE =================
+def ai_response(user_id, text, mode):
 
-        user_mode[uid] = None
+    # حافظه گفتگو
+    memory[user_id].append(text)
+    history = "\n".join(memory[user_id][-5:])
 
-        await query.message.reply_text(
-            "🔙 بازگشت",
-            reply_markup=main_menu()
-        )
+    if mode == "chat":
+        return f"🤖 پاسخ هوشمند:\n\n{text}\n\n🧠 حافظه:\n{history}"
 
-    elif query.data == "amirza":
+    elif mode == "study":
+        return f"📚 حل آموزشی:\n\nموضوع: {text}\n\n💡 توضیح:\nاین سوال را مرحله به مرحله تحلیل می‌کنم...\n(نسخه پرو قابل اتصال به GPT دارد)"
 
-        user_mode[uid] = "amirza"
+    elif mode == "search":
+        return web_search(text)
 
-        await query.message.reply_text(
-            "🎮 شماره مرحله آمیرزا را وارد کنید:",
-            reply_markup=back_menu()
-        )
+    return "از منو استفاده کن"
 
-    elif query.data == "fandogh":
+# ================= WEB SEARCH =================
+def web_search(query):
+    try:
+        url = f"https://duckduckgo.com/?q={query}"
+        return f"🔎 نتیجه جستجو:\n{url}"
+    except:
+        return "❌ خطا در جستجو"
 
-        user_mode[uid] = "fandogh"
+# ================= NEWS =================
+def get_news():
+    try:
+        r = requests.get("https://www.aljazeera.com/xml/rss/all.xml", timeout=10)
+        if r.status_code == 200:
+            return "📰 آخرین اخبار دریافت شد (نسخه ساده)\n\nبرای نسخه حرفه‌ای RSS کامل اضافه می‌شود"
+        return "❌ خبر پیدا نشد"
+    except:
+        return "❌ خطا در دریافت خبر"
 
-        await query.message.reply_text(
-            "🥜 شماره مرحله فندوق را وارد کنید:",
-            reply_markup=back_menu()
-        )
-
-    elif query.data == "info":
-
-        text = (
-            f"📊 آمار ربات\n\n"
-            f"👥 کاربران: {stats['users']}\n"
-            f"🔎 جستجوها: {stats['searches']}"
-        )
-
-        await query.message.reply_text(
-            text,
-            reply_markup=main_menu()
-        )
-
-# =========================
-# جستجو
-# =========================
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ================= MESSAGE =================
+async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     uid = update.effective_user.id
-    text = update.message.text.strip()
+    text = update.message.text
+
+    stats["users"].add(uid)
+    stats["messages"] += 1
 
     mode = user_mode.get(uid)
 
-    if mode is None:
-
-        await update.message.reply_text(
-            "ابتدا بازی را انتخاب کن 👇",
-            reply_markup=main_menu()
-        )
-
+    if not mode:
+        await update.message.reply_text("از منو انتخاب کن 👇", reply_markup=menu())
         return
 
-    if not text.isdigit():
+    reply = ai_response(uid, text, mode)
 
-        await update.message.reply_text(
-            "❌ فقط شماره مرحله را ارسال کن"
-        )
+    await update.message.reply_text(reply)
 
-        return
-
-    stage = text
-
-    game_data = answers.get(mode, {})
-
-    result = game_data.get(stage)
-
-    stats["searches"] += 1
-    save_json(STATS_FILE, stats)
-
-    if result:
-
-        if isinstance(result, list):
-            result_text = "\n".join([f"• {x}" for x in result])
-        else:
-            result_text = str(result)
-
-        game_name = "آمیرزا" if mode == "amirza" else "فندوق"
-
-        await update.message.reply_text(
-            f"🎮 {game_name}\n\n"
-            f"📌 مرحله: {stage}\n\n"
-            f"{result_text}",
-            reply_markup=back_menu()
-        )
-
-    else:
-
-        await update.message.reply_text(
-            "❌ مرحله پیدا نشد",
-            reply_markup=back_menu()
-        )
-
-# =========================
-# پنل ادمین
-# =========================
-
-async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    await update.message.reply_text(
-        f"📊 آمار ربات\n\n"
-        f"👥 کاربران: {stats['users']}\n"
-        f"🔎 جستجوها: {stats['searches']}"
-    )
-
-# =========================
-# MAIN
-# =========================
-
+# ================= MAIN =================
 def main():
-
     keep_alive()
 
-    app = Application.builder().token(TOKEN).build()
+    app_bot = Application.builder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("stats", stats_cmd))
+    app_bot.add_handler(CommandHandler("start", start))
+    app_bot.add_handler(CallbackQueryHandler(buttons))
+    app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
 
-    app.add_handler(
-        CallbackQueryHandler(buttons)
-    )
-
-    app.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            handle_message
-        )
-    )
-
-    print("BOT RUNNING")
-
-    app.run_polling()
+    print("🤖 PRO AI BOT RUNNING")
+    app_bot.run_polling()
 
 if __name__ == "__main__":
     main()
