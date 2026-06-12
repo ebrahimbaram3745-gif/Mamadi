@@ -1,9 +1,7 @@
 import os
 import json
 import logging
-from threading import Thread
 
-from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -14,26 +12,16 @@ from telegram.ext import (
     filters
 )
 
-# ---------------- FLASK KEEP ALIVE ----------------
-app_flask = Flask('')
-
-@app_flask.route('/', methods=['GET', 'HEAD'])
-def home():
-    return "Bot is running!", 200
-
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app_flask.run(host='0.0.0.0', port=port)
-
-def keep_alive():
-    t = Thread(target=run_flask)
-    t.start()
-
-# ---------------- BOT CONFIG ----------------
-TOKEN = os.getenv("8843057441:AAG3vIg4g6oGb1NerGH6arzblOwAGQShxD4")
-
+# ---------------- LOGGING ----------------
 logging.basicConfig(level=logging.INFO)
 
+# ---------------- TOKEN (FIXED) ----------------
+TOKEN = os.environ.get("8843057441:AAG3vIg4g6oGb1NerGH6arzblOwAGQShxD4")
+
+if not TOKEN:
+    raise Exception("❌ BOT_TOKEN is not set in Render Environment Variables")
+
+# ---------------- MEMORY ----------------
 waiting_users = set()
 
 # ---------------- LOAD ANSWERS ----------------
@@ -46,11 +34,11 @@ except:
 # ---------------- START ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("🎮 جستجوی جواب مرحله", callback_data="search")]
+        [InlineKeyboardButton("🎮 دریافت جواب مرحله", callback_data="search")]
     ]
 
     await update.message.reply_text(
-        "👋 به ربات جواب آمیرزا خوش آمدی",
+        "👋 به ربات آمیرزا خوش آمدی\n\nیکی از گزینه‌ها را انتخاب کن:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -82,15 +70,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         await update.message.reply_text(
-            "❌ جوابی برای این مرحله پیدا نشد"
+            "❌ برای این مرحله جوابی ثبت نشده"
         )
 
     waiting_users.discard(user_id)
 
 # ---------------- MAIN ----------------
 def main():
-    keep_alive()
-
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
