@@ -19,7 +19,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "ANTI BUG AI BOT RUNNING"
+    return "BOT RUNNING"
 
 def run():
     port = int(os.environ.get("PORT", 10000))
@@ -31,19 +31,44 @@ def keep_alive():
 # ================= STATE =================
 user_mode = {}
 
-# ================= MENUS =================
+# ================= UI (2 ROW MENU) =================
 def main_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🤖 چت AI", callback_data="chat")],
-        [InlineKeyboardButton("📚 حل درس", callback_data="study")],
-        [InlineKeyboardButton("⚡ GPT", callback_data="gpt")],
-        [InlineKeyboardButton("🧠 Gemini", callback_data="gemini")]
+        [
+            InlineKeyboardButton("💬 ChatGPT", callback_data="gpt"),
+            InlineKeyboardButton("🧠 Gemini", callback_data="gemini")
+        ],
+        [
+            InlineKeyboardButton("📚 حل درسی", callback_data="study")
+        ]
     ])
 
 def back_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🔙 بازگشت", callback_data="back")]
     ])
+
+# ================= GEMINI FIXED =================
+def ask_gemini(text):
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+
+        r = requests.post(url, json={
+            "contents": [{"parts": [{"text": text}]}]
+        }, timeout=20)
+
+        data = r.json()
+
+        if "error" in data:
+            return f"❌ Gemini Error: {data['error']['message']}"
+
+        if "candidates" not in data:
+            return f"❌ Gemini Invalid Response:\n{data}"
+
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+
+    except Exception as e:
+        return f"❌ Gemini Exception: {e}"
 
 # ================= OPENAI =================
 def ask_openai(text):
@@ -71,83 +96,53 @@ def ask_openai(text):
     except Exception as e:
         return f"❌ GPT Exception: {e}"
 
-# ================= GEMINI =================
-def ask_gemini(text):
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
-
-        r = requests.post(url, json={
-            "contents": [{"parts": [{"text": text}]}]
-        }, timeout=20)
-
-        data = r.json()
-
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-
-    except Exception as e:
-        return f"❌ Gemini Error: {e}"
-
-# ================= SMART AI =================
-def smart_ai(text):
-    gpt = ask_openai(text)
-    gemini = ask_gemini(text)
-
-    if len(str(gpt)) > len(str(gemini)):
-        return f"🤖 GPT:\n{gpt}\n\n🧠 Gemini backup:\n{gemini}"
-    else:
-        return f"🧠 Gemini:\n{gemini}\n\n🤖 GPT backup:\n{gpt}"
-
 # ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🚀 ربات AI ضد باگ فعال شد",
+        "🤖 ربات AI فعال شد",
         reply_markup=main_menu()
     )
 
-# ================= CALLBACK (EDIT MESSAGE - مهم) =================
+# ================= CALLBACK =================
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
     uid = q.from_user.id
 
-    # فقط حالت رو ذخیره می‌کنیم
+    if q.data == "back":
+        user_mode.pop(uid, None)
+
+        await q.message.edit_text(
+            "🏠 منوی اصلی",
+            reply_markup=main_menu()
+        )
+        return
+
+    # حالت‌ها
     user_mode[uid] = q.data
 
-    text_map = {
-        "chat": "💬 حالت چت AI فعال شد\nپیام خود را ارسال کنید:",
-        "study": "📚 حالت درسی فعال شد\nسوال خود را بفرست:",
-        "gpt": "⚡ حالت GPT فعال شد",
-        "gemini": "🧠 حالت Gemini فعال شد"
-    }
+    if q.data == "gpt":
+        text = "💬 حالت ChatGPT فعال شد\nپیام خود را ارسال کنید:"
 
-    msg = text_map.get(q.data, "انتخاب شد")
+    elif q.data == "gemini":
+        text = "🧠 حالت Gemini فعال شد\nپیام خود را ارسال کنید:"
 
-    # 🔥 مهم: EDIT پیام (نه ارسال پیام جدید)
-    await q.message.edit_text(
-        msg,
-        reply_markup=back_menu()
-    )
+    elif q.data == "study":
+        text = "📚 حالت درسی فعال شد\nسوال خود را بفرست:"
 
-# ================= BACK =================
-async def back(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
+    else:
+        text = "انتخاب شد"
 
-    uid = q.from_user.id
-    user_mode.pop(uid, None)
+    await q.message.edit_text(text, reply_markup=back_menu())
 
-    await q.message.edit_text(
-        "🏠 منوی اصلی",
-        reply_markup=main_menu()
-    )
-
-# ================= HANDLE MESSAGE =================
+# ================= MESSAGE =================
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     uid = update.effective_user.id
     text = update.message.text
 
-    mode = user_mode.get(uid, "chat")
+    mode = user_mode.get(uid, "gpt")
 
     if mode == "gpt":
         reply = ask_openai(text)
@@ -155,11 +150,8 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif mode == "gemini":
         reply = ask_gemini(text)
 
-    elif mode == "study":
-        reply = ask_openai("حل آموزشی مرحله‌ای: " + text)
-
     else:
-        reply = smart_ai(text)
+        reply = ask_openai("حل آموزشی: " + text)
 
     await update.message.reply_text(reply, reply_markup=back_menu())
 
@@ -171,10 +163,9 @@ def main():
 
     app_bot.add_handler(CommandHandler("start", start))
     app_bot.add_handler(CallbackQueryHandler(buttons))
-    app_bot.add_handler(CallbackQueryHandler(back, pattern="back"))
     app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
 
-    print("🔥 ANTI BUG AI RUNNING")
+    print("🔥 BOT RUNNING")
     app_bot.run_polling()
 
 if __name__ == "__main__":
