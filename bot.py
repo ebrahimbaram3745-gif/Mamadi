@@ -51,8 +51,7 @@ def back_menu():
 # ================= GEMINI FIXED =================
 def ask_gemini(text):
     try:
-        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-pro:generateContent?key={GEMINI_KEY}"
-
+        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
         r = requests.post(url, json={
             "contents": [{"parts": [{"text": text}]}]
         }, timeout=20)
