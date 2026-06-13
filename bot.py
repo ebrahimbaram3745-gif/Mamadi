@@ -1,178 +1,195 @@
 import os
 import json
-import time
 import requests
-from flask import Flask
-from threading import Thread
-
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    ContextTypes,
+    filters
+)
 
-# ================= CONFIG =================
+# =========================
+# CONFIG
+# =========================
+
 TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("7363962357", "0"))
 
-# ================= FLASK =================
-app = Flask(__name__)
+if not TOKEN:
+    raise Exception("BOT_TOKEN not set")
 
-@app.route("/")
-def home():
-    return "VIP Downloader Bot Running"
+user_state = {}
 
-def run():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+# =========================
+# MENU
+# =========================
 
-def keep_alive():
-    Thread(target=run).start()
-
-# ================= DATA =================
-def load(name, default):
-    try:
-        with open(f"data/{name}.json", "r") as f:
-            return json.load(f)
-    except:
-        return default
-
-def save(name, data):
-    with open(f"data/{name}.json", "w") as f:
-        json.dump(data, f, indent=2)
-
-users = load("users", {})
-vip = load("vip", {})
-stats = load("stats", {"downloads": 0})
-
-# ================= LIMIT =================
-DAILY_LIMIT = 3
-
-def can_use(uid):
-    u = users.get(str(uid), {"count": 0, "time": time.time()})
-
-    # reset daily
-    if time.time() - u["time"] > 86400:
-        u = {"count": 0, "time": time.time()}
-
-    users[str(uid)] = u
-    save("users", users)
-
-    if str(uid) in vip:
-        return True
-
-    return u["count"] < DAILY_LIMIT
-
-def use(uid):
-    u = users[str(uid)]
-    u["count"] += 1
-    users[str(uid)] = u
-    save("users", users)
-
-# ================= UI =================
-def menu():
+def main_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📥 دانلود", callback_data="dl")],
-        [InlineKeyboardButton("💎 خرید VIP", callback_data="vip")]
+        [InlineKeyboardButton("🧠 ابزارها", callback_data="tools")],
+        [InlineKeyboardButton("🌍 ابزار آنلاین", callback_data="online")],
     ])
 
-# ================= DOWNLOAD (SIMPLE STABLE) =================
-def download(url):
-    try:
-        r = requests.get(url, timeout=20)
-        return r.content
-    except:
-        return None
+def tools_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔤 مترجم", callback_data="translate")],
+        [InlineKeyboardButton("📱 QR ساز", callback_data="qr")],
+        [InlineKeyboardButton("🌐 IP Info", callback_data="ipinfo")],
+        [InlineKeyboardButton("⏰ زمان جهانی", callback_data="time")],
+        [InlineKeyboardButton("🔙 برگشت", callback_data="back")]
+    ])
 
-# ================= START =================
+def back_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔙 برگشت به منو", callback_data="home")]
+    ])
+
+# =========================
+# START
+# =========================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
+    user_state[uid] = None
 
     await update.message.reply_text(
-        "🚀 VIP Downloader Bot\n\nلینک بفرست 👇",
-        reply_markup=menu()
+        "🤖 All Tools Bot\nیکی از گزینه‌ها رو انتخاب کن:",
+        reply_markup=main_menu()
     )
 
-# ================= BUTTONS =================
+# =========================
+# CALLBACK
+# =========================
+
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
     uid = q.from_user.id
 
-    if q.data == "vip":
-        await q.message.reply_text(
-            "💎 VIP:\n\n"
-            "✔ دانلود نامحدود\n"
-            "✔ سرعت بالا\n\n"
-            f"📌 برای فعال‌سازی پیام بده به ادمین: {ADMIN_ID}"
+    # HOME
+    if q.data == "home":
+        user_state[uid] = None
+        await q.message.edit_text("🏠 منو اصلی", reply_markup=main_menu())
+
+    # TOOLS MENU
+    elif q.data == "tools":
+        user_state[uid] = None
+        await q.message.edit_text("🧠 ابزارها:", reply_markup=tools_menu())
+
+    # BACK
+    elif q.data == "back":
+        user_state[uid] = None
+        await q.message.edit_text("🏠 برگشت", reply_markup=main_menu())
+
+    # TRANSLATE
+    elif q.data == "translate":
+        user_state[uid] = "translate"
+        await q.message.edit_text(
+            "🔤 متن رو بفرست تا ترجمه کنم (فعلاً EN → FA)",
+            reply_markup=back_menu()
         )
 
-    elif q.data == "dl":
-        await q.message.reply_text("📥 لینک ارسال کن 👇")
+    # QR
+    elif q.data == "qr":
+        user_state[uid] = "qr"
+        await q.message.edit_text(
+            "📱 متن رو بفرست تا QR بسازم",
+            reply_markup=back_menu()
+        )
 
-# ================= HANDLE =================
+    # IP INFO
+    elif q.data == "ipinfo":
+        user_state[uid] = "ip"
+        await q.message.edit_text(
+            "🌐 IP رو بفرست:",
+            reply_markup=back_menu()
+        )
+
+    # TIME
+    elif q.data == "time":
+        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        await q.message.edit_text(
+            f"⏰ زمان UTC:\n{now}",
+            reply_markup=tools_menu()
+        )
+
+# =========================
+# TRANSLATE API (بدون دردسر)
+# =========================
+
+def translate(text):
+    url = "https://api.mymemory.translated.net/get"
+    r = requests.get(url, params={
+        "q": text,
+        "langpair": "en|fa"
+    })
+    return r.json()["responseData"]["translatedText"]
+
+# =========================
+# QR API
+# =========================
+
+def make_qr(text):
+    return f"https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={text}"
+
+# =========================
+# IP INFO
+# =========================
+
+def ip_info(ip):
+    r = requests.get(f"https://ipinfo.io/{ip}/json")
+    return r.json()
+
+# =========================
+# MESSAGE HANDLER
+# =========================
+
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    url = update.message.text.strip()
+    text = update.message.text.strip()
 
-    # check limit
-    if not can_use(uid):
-        await update.message.reply_text("⛔ محدودیت روزانه تمام شد\n💎 برای VIP شدن /start")
+    state = user_state.get(uid)
+
+    # TRANSLATE
+    if state == "translate":
+        result = translate(text)
+        await update.message.reply_text(f"🌍 ترجمه:\n{result}")
         return
 
-    await update.message.reply_text("⏳ در حال دانلود...")
-
-    data = download(url)
-
-    if not data:
-        await update.message.reply_text("❌ خطا در دانلود")
+    # QR
+    if state == "qr":
+        url = make_qr(text)
+        await update.message.reply_photo(photo=url, caption="📱 QR Code")
         return
 
-    use(uid)
-    stats["downloads"] += 1
-    save("stats", stats)
-
-    await update.message.reply_document(document=data)
-
-# ================= ADMIN =================
-async def addvip(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    try:
-        uid = context.args[0]
-        vip[uid] = True
-        save("vip", vip)
-        await update.message.reply_text("✅ VIP اضافه شد")
-    except:
-        await update.message.reply_text("❌ /addvip user_id")
-
-async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    # IP
+    if state == "ip":
+        data = ip_info(text)
+        await update.message.reply_text(json.dumps(data, indent=2))
         return
 
     await update.message.reply_text(
-        f"📊 آمار:\n\n"
-        f"📥 دانلودها: {stats['downloads']}\n"
-        f"👤 کاربران: {len(users)}\n"
-        f"💎 VIP: {len(vip)}"
+        "❗ از منو استفاده کن",
+        reply_markup=main_menu()
     )
 
-# ================= MAIN =================
+# =========================
+# MAIN
+# =========================
+
 def main():
-    if not TOKEN:
-        raise Exception("BOT_TOKEN missing")
+    app = Application.builder().token(TOKEN).build()
 
-    keep_alive()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(buttons))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
 
-    bot = Application.builder().token(TOKEN).build()
-
-    bot.add_handler(CommandHandler("start", start))
-    bot.add_handler(CommandHandler("addvip", addvip))
-    bot.add_handler(CommandHandler("stats", stats_cmd))
-    bot.add_handler(CallbackQueryHandler(buttons))
-    bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
-
-    print("💎 VIP BOT RUNNING")
-    bot.run_polling(drop_pending_updates=True)
+    print("BOT RUNNING...")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
