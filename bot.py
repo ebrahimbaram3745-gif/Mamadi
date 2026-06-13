@@ -5,7 +5,7 @@ from flask import Flask
 from threading import Thread
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
 # ================== CONFIG ==================
 logging.basicConfig(level=logging.INFO)
@@ -15,14 +15,14 @@ GEMINI_KEY = os.getenv("GEMINI_KEY")
 OPENAI_KEY = os.getenv("OPENAI_KEY")
 
 if not BOT_TOKEN:
-    raise Exception("BOT_TOKEN is missing")
+    raise Exception("BOT_TOKEN missing")
 
-# ================== FLASK KEEP ALIVE ==================
+# ================== KEEP ALIVE ==================
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "AI Bot Running"
+    return "Ultra AI Bot Running"
 
 def run():
     port = int(os.environ.get("PORT", 10000))
@@ -31,7 +31,21 @@ def run():
 def keep_alive():
     Thread(target=run).start()
 
-# ================== AI: GEMINI ==================
+# ================== MEMORY ==================
+user_memory = {}
+
+def get_memory(uid):
+    if uid not in user_memory:
+        user_memory[uid] = []
+    return user_memory[uid]
+
+def add_memory(uid, role, text):
+    mem = get_memory(uid)
+    mem.append({"role": role, "text": text})
+    if len(mem) > 10:
+        mem.pop(0)
+
+# ================== GEMINI ==================
 def ask_gemini(text):
     try:
         url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
@@ -50,8 +64,8 @@ def ask_gemini(text):
     except:
         return None
 
-# ================== AI: OPENAI ==================
-def ask_openai(text):
+# ================== GPT ==================
+def ask_gpt(text):
     try:
         url = "https://api.openai.com/v1/chat/completions"
 
@@ -73,43 +87,92 @@ def ask_openai(text):
     except:
         return None
 
-# ================== FALLBACK ==================
-def fallback_answer(text):
-    return f"🤖 پاسخ ساده:\n\nمن الان دسترسی AI ندارم، ولی سوال شما:\n{text}\n\n(لطفاً بعداً دوباره امتحان کنید)"
+# ================== AI ENGINE ==================
+def ai_engine(uid, text):
 
-# ================== MAIN AI ENGINE ==================
-def smart_ai(text):
+    history = get_memory(uid)
+    context = "\n".join([f"{m['role']}: {m['text']}" for m in history])
+
+    prompt = f"""
+شما یک AI هوشمند هستی.
+
+تاریخ گفتگو:
+{context}
+
+کاربر:
+{text}
+"""
 
     # 1. Gemini
-    result = ask_gemini(text)
-    if result:
-        return "🧠 Gemini:\n\n" + result
+    res = ask_gemini(prompt)
+    if res:
+        add_memory(uid, "user", text)
+        add_memory(uid, "ai", res)
+        return "🧠 Gemini:\n\n" + res
 
     # 2. GPT
-    result = ask_openai(text)
-    if result:
-        return "🤖 GPT:\n\n" + result
+    res = ask_gpt(prompt)
+    if res:
+        add_memory(uid, "user", text)
+        add_memory(uid, "ai", res)
+        return "🤖 GPT:\n\n" + res
 
-    # 3. Fallback
-    return fallback_answer(text)
+    # 3. fallback
+    return "⚠️ AI در دسترس نیست، بعداً تلاش کنید."
 
-# ================== TELEGRAM ==================
+# ================== MENU ==================
+def menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💬 چت AI", callback_data="chat")],
+        [InlineKeyboardButton("📚 کمک درسی", callback_data="study")],
+        [InlineKeyboardButton("🧠 خلاصه ساز", callback_data="summary")]
+    ])
+
+# ================== MODE ==================
+user_mode = {}
+
+# ================== START ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("🤖 AI Chat", callback_data="ai")]
-    ]
-
     await update.message.reply_text(
-        "🤖 AI Bot Ready\nپیام بده جواب بگیر",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        "🤖 Ultra Pro AI Bot\nیک حالت انتخاب کن:",
+        reply_markup=menu()
     )
 
+# ================== BUTTONS ==================
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    uid = q.from_user.id
+
+    if q.data == "chat":
+        user_mode[uid] = "chat"
+        await q.message.reply_text("💬 حالت چت فعال شد")
+
+    elif q.data == "study":
+        user_mode[uid] = "study"
+        await q.message.reply_text("📚 حالت کمک درسی فعال شد")
+
+    elif q.data == "summary":
+        user_mode[uid] = "summary"
+        await q.message.reply_text("🧠 حالت خلاصه ساز فعال شد")
+
+# ================== MESSAGE ==================
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
     text = update.message.text
 
-    await update.message.reply_text("⏳ در حال پردازش...")
+    mode = user_mode.get(uid, "chat")
 
-    reply = smart_ai(text)
+    if mode == "study":
+        text = "این سوال را ساده و آموزشی حل کن:\n" + text
+
+    elif mode == "summary":
+        text = "این متن را خلاصه کن:\n" + text
+
+    await update.message.reply_text("⏳ در حال فکر کردن...")
+
+    reply = ai_engine(uid, text)
 
     await update.message.reply_text(reply)
 
@@ -120,10 +183,12 @@ def main():
     app_bot = Application.builder().token(BOT_TOKEN).build()
 
     app_bot.add_handler(CommandHandler("start", start))
+    app_bot.add_handler(CallbackQueryHandler(buttons))
     app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
 
-    print("BOT RUNNING...")
+    print("ULTRA AI RUNNING")
     app_bot.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
+    
