@@ -1,23 +1,12 @@
 import os
 import re
-import asyncio
-import logging
 import requests
+import logging
 from flask import Flask
 from threading import Thread
-from io import BytesIO
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    filters
-)
-
-import yt_dlp
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
 # ================= LOG =================
 logging.basicConfig(level=logging.INFO)
@@ -29,7 +18,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Downloader PRO Bot Running"
+    return "PRO Downloader API Bot Running"
 
 def run():
     port = int(os.environ.get("PORT", 10000))
@@ -39,55 +28,54 @@ def keep_alive():
     Thread(target=run).start()
 
 # ================= UI =================
-def main_menu():
+def menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📥 دانلود لینک", callback_data="dl")],
-        [InlineKeyboardButton("ℹ️ راهنما", callback_data="help")],
-        [InlineKeyboardButton("⚡ وضعیت", callback_data="status")]
+        [InlineKeyboardButton("ℹ️ راهنما", callback_data="help")]
     ])
-
-def back_btn():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="back")]
-    ])
-
-# ================= START =================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🚀 Downloader PRO Bot\n\nلینک بفرست یا یکی از گزینه‌ها رو انتخاب کن 👇",
-        reply_markup=main_menu()
-    )
 
 # ================= DETECT =================
 def detect(url):
-    if "youtube.com" in url or "youtu.be" in url:
+    if "youtu" in url:
         return "youtube"
+    if "instagram.com" in url:
+        return "instagram"
     if re.search(r"\.(jpg|png|jpeg|webp)$", url):
         return "image"
     if re.search(r"\.(mp4|mov|mkv)$", url):
         return "video"
     return "file"
 
-# ================= YOUTUBE DOWNLOAD =================
-def download_youtube(url):
+# ================= YOUTUBE (Piped API) =================
+def youtube_download(url):
     try:
-        ydl_opts = {
-            "format": "mp4/best",
-            "outtmpl": "video.mp4",
-            "quiet": True
-        }
+        api = f"https://pipedapi.kavin.rocks/streams/{extract_youtube_id(url)}"
+        r = requests.get(api, timeout=20)
+        data = r.json()
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-
-        with open("video.mp4", "rb") as f:
-            return f.read()
-
+        video_url = data["videoStreams"][0]["url"]
+        return requests.get(video_url, timeout=20).content
     except Exception as e:
         return str(e)
 
-# ================= DIRECT DOWNLOAD =================
-def download_file(url):
+def extract_youtube_id(url):
+    match = re.search(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]+)", url)
+    return match.group(1) if match else ""
+
+# ================= INSTAGRAM =================
+def instagram_download(url):
+    try:
+        api = "https://snapinsta.io/api/parse"
+        r = requests.post(api, data={"url": url}, timeout=20)
+        data = r.json()
+
+        media_url = data["media"][0]["url"]
+        return requests.get(media_url, timeout=20).content
+    except Exception as e:
+        return str(e)
+
+# ================= DIRECT =================
+def download_direct(url):
     try:
         r = requests.get(url, timeout=20)
         return r.content
@@ -101,54 +89,58 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if q.data == "help":
         await q.message.reply_text(
-            "📌 فقط لینک بفرست\n"
-            "- یوتیوب\n- عکس\n- ویدیو\n- فایل\n\n"
-            "ربات خودش تشخیص میده",
-            reply_markup=back_btn()
+            "📌 لینک بفرست:\n"
+            "- YouTube\n- Instagram\n- عکس\n- ویدیو\n- فایل"
         )
 
     elif q.data == "dl":
-        await q.message.reply_text("📥 لینک رو بفرست 👇")
+        await q.message.reply_text("📥 لینک را ارسال کن 👇")
 
-    elif q.data == "status":
-        await q.message.reply_text("⚡ ربات آنلاین و آماده دانلود")
-
-    elif q.data == "back":
-        await q.message.reply_text("🏠 منوی اصلی", reply_markup=main_menu())
-
-# ================= HANDLER =================
+# ================= HANDLE =================
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
 
-    await update.message.reply_text("⏳ در حال پردازش لینک...")
+    await update.message.reply_text("⏳ در حال پردازش...")
 
     t = detect(url)
 
+    # YouTube
     if t == "youtube":
-        await update.message.reply_text("🎥 دانلود یوتیوب در حال انجام...")
-
-        data = download_youtube(url)
-
+        data = youtube_download(url)
         if isinstance(data, bytes):
             await update.message.reply_video(video=data)
         else:
-            await update.message.reply_text(f"❌ خطا: {data}")
+            await update.message.reply_text("❌ خطا یوتیوب")
 
-    else:
-        data = download_file(url)
-
-        if not data:
-            await update.message.reply_text("❌ دانلود ناموفق بود")
-            return
-
-        if t == "image":
-            await update.message.reply_photo(photo=data)
-
-        elif t == "video":
+    # Instagram
+    elif t == "instagram":
+        data = instagram_download(url)
+        if isinstance(data, bytes):
             await update.message.reply_video(video=data)
-
         else:
-            await update.message.reply_document(document=data)
+            await update.message.reply_text("❌ خطا اینستا")
+
+    # Image
+    elif t == "image":
+        data = download_direct(url)
+        await update.message.reply_photo(photo=data)
+
+    # Video
+    elif t == "video":
+        data = download_direct(url)
+        await update.message.reply_video(video=data)
+
+    # File
+    else:
+        data = download_direct(url)
+        await update.message.reply_document(document=data)
+
+# ================= START =================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🚀 Downloader PRO API Bot\nلینک بفرست 👇",
+        reply_markup=menu()
+    )
 
 # ================= MAIN =================
 def main():
@@ -163,7 +155,7 @@ def main():
     app_bot.add_handler(CallbackQueryHandler(buttons))
     app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
 
-    print("🚀 PRO Downloader Bot Running")
+    print("🚀 PRO API Downloader Running")
     app_bot.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
