@@ -1,24 +1,23 @@
 import os
-import re
+import json
+import time
 import requests
-import logging
 from flask import Flask
 from threading import Thread
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
-# ================= LOG =================
-logging.basicConfig(level=logging.INFO)
-
+# ================= CONFIG =================
 TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("7363962357", "0"))
 
-# ================= KEEP ALIVE =================
+# ================= FLASK =================
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "PRO Downloader API Bot Running"
+    return "VIP Downloader Bot Running"
 
 def run():
     port = int(os.environ.get("PORT", 10000))
@@ -27,136 +26,153 @@ def run():
 def keep_alive():
     Thread(target=run).start()
 
+# ================= DATA =================
+def load(name, default):
+    try:
+        with open(f"data/{name}.json", "r") as f:
+            return json.load(f)
+    except:
+        return default
+
+def save(name, data):
+    with open(f"data/{name}.json", "w") as f:
+        json.dump(data, f, indent=2)
+
+users = load("users", {})
+vip = load("vip", {})
+stats = load("stats", {"downloads": 0})
+
+# ================= LIMIT =================
+DAILY_LIMIT = 3
+
+def can_use(uid):
+    u = users.get(str(uid), {"count": 0, "time": time.time()})
+
+    # reset daily
+    if time.time() - u["time"] > 86400:
+        u = {"count": 0, "time": time.time()}
+
+    users[str(uid)] = u
+    save("users", users)
+
+    if str(uid) in vip:
+        return True
+
+    return u["count"] < DAILY_LIMIT
+
+def use(uid):
+    u = users[str(uid)]
+    u["count"] += 1
+    users[str(uid)] = u
+    save("users", users)
+
 # ================= UI =================
 def menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📥 دانلود لینک", callback_data="dl")],
-        [InlineKeyboardButton("ℹ️ راهنما", callback_data="help")]
+        [InlineKeyboardButton("📥 دانلود", callback_data="dl")],
+        [InlineKeyboardButton("💎 خرید VIP", callback_data="vip")]
     ])
 
-# ================= DETECT =================
-def detect(url):
-    if "youtu" in url:
-        return "youtube"
-    if "instagram.com" in url:
-        return "instagram"
-    if re.search(r"\.(jpg|png|jpeg|webp)$", url):
-        return "image"
-    if re.search(r"\.(mp4|mov|mkv)$", url):
-        return "video"
-    return "file"
-
-# ================= YOUTUBE (Piped API) =================
-def youtube_download(url):
-    try:
-        api = f"https://pipedapi.kavin.rocks/streams/{extract_youtube_id(url)}"
-        r = requests.get(api, timeout=20)
-        data = r.json()
-
-        video_url = data["videoStreams"][0]["url"]
-        return requests.get(video_url, timeout=20).content
-    except Exception as e:
-        return str(e)
-
-def extract_youtube_id(url):
-    match = re.search(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]+)", url)
-    return match.group(1) if match else ""
-
-# ================= INSTAGRAM =================
-def instagram_download(url):
-    try:
-        api = "https://snapinsta.io/api/parse"
-        r = requests.post(api, data={"url": url}, timeout=20)
-        data = r.json()
-
-        media_url = data["media"][0]["url"]
-        return requests.get(media_url, timeout=20).content
-    except Exception as e:
-        return str(e)
-
-# ================= DIRECT =================
-def download_direct(url):
+# ================= DOWNLOAD (SIMPLE STABLE) =================
+def download(url):
     try:
         r = requests.get(url, timeout=20)
         return r.content
     except:
         return None
 
-# ================= CALLBACK =================
+# ================= START =================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+
+    await update.message.reply_text(
+        "🚀 VIP Downloader Bot\n\nلینک بفرست 👇",
+        reply_markup=menu()
+    )
+
+# ================= BUTTONS =================
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
-    if q.data == "help":
+    uid = q.from_user.id
+
+    if q.data == "vip":
         await q.message.reply_text(
-            "📌 لینک بفرست:\n"
-            "- YouTube\n- Instagram\n- عکس\n- ویدیو\n- فایل"
+            "💎 VIP:\n\n"
+            "✔ دانلود نامحدود\n"
+            "✔ سرعت بالا\n\n"
+            f"📌 برای فعال‌سازی پیام بده به ادمین: {ADMIN_ID}"
         )
 
     elif q.data == "dl":
-        await q.message.reply_text("📥 لینک را ارسال کن 👇")
+        await q.message.reply_text("📥 لینک ارسال کن 👇")
 
 # ================= HANDLE =================
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
     url = update.message.text.strip()
 
-    await update.message.reply_text("⏳ در حال پردازش...")
+    # check limit
+    if not can_use(uid):
+        await update.message.reply_text("⛔ محدودیت روزانه تمام شد\n💎 برای VIP شدن /start")
+        return
 
-    t = detect(url)
+    await update.message.reply_text("⏳ در حال دانلود...")
 
-    # YouTube
-    if t == "youtube":
-        data = youtube_download(url)
-        if isinstance(data, bytes):
-            await update.message.reply_video(video=data)
-        else:
-            await update.message.reply_text("❌ خطا یوتیوب")
+    data = download(url)
 
-    # Instagram
-    elif t == "instagram":
-        data = instagram_download(url)
-        if isinstance(data, bytes):
-            await update.message.reply_video(video=data)
-        else:
-            await update.message.reply_text("❌ خطا اینستا")
+    if not data:
+        await update.message.reply_text("❌ خطا در دانلود")
+        return
 
-    # Image
-    elif t == "image":
-        data = download_direct(url)
-        await update.message.reply_photo(photo=data)
+    use(uid)
+    stats["downloads"] += 1
+    save("stats", stats)
 
-    # Video
-    elif t == "video":
-        data = download_direct(url)
-        await update.message.reply_video(video=data)
+    await update.message.reply_document(document=data)
 
-    # File
-    else:
-        data = download_direct(url)
-        await update.message.reply_document(document=data)
+# ================= ADMIN =================
+async def addvip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
 
-# ================= START =================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        uid = context.args[0]
+        vip[uid] = True
+        save("vip", vip)
+        await update.message.reply_text("✅ VIP اضافه شد")
+    except:
+        await update.message.reply_text("❌ /addvip user_id")
+
+async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+
     await update.message.reply_text(
-        "🚀 Downloader PRO API Bot\nلینک بفرست 👇",
-        reply_markup=menu()
+        f"📊 آمار:\n\n"
+        f"📥 دانلودها: {stats['downloads']}\n"
+        f"👤 کاربران: {len(users)}\n"
+        f"💎 VIP: {len(vip)}"
     )
 
 # ================= MAIN =================
 def main():
     if not TOKEN:
-        raise Exception("BOT_TOKEN not set")
+        raise Exception("BOT_TOKEN missing")
 
     keep_alive()
 
-    app_bot = Application.builder().token(TOKEN).build()
+    bot = Application.builder().token(TOKEN).build()
 
-    app_bot.add_handler(CommandHandler("start", start))
-    app_bot.add_handler(CallbackQueryHandler(buttons))
-    app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
+    bot.add_handler(CommandHandler("start", start))
+    bot.add_handler(CommandHandler("addvip", addvip))
+    bot.add_handler(CommandHandler("stats", stats_cmd))
+    bot.add_handler(CallbackQueryHandler(buttons))
+    bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
 
-    print("🚀 PRO API Downloader Running")
-    app_bot.run_polling(drop_pending_updates=True)
+    print("💎 VIP BOT RUNNING")
+    bot.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
